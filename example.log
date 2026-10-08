@@ -1,0 +1,7 @@
+[ 7302.095245] wordsDev: Module loaded
+[ 7307.468663] wordsDev: stored 13 bytes (13 total, 2 words)
+[ 7310.338659] wordsDev: stored 22 bytes (35 total, 6 words)
+[ 7391.965208] wordsDev: Randomly selected word: my
+[ 7391.990638] wordsDev: Randomly selected word: my
+[ 7392.004356] wordsDev: Randomly selected word: Hello
+[ 7421.165496] wordsDev: Module unloaded
