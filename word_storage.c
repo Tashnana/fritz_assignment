@@ -5,6 +5,9 @@
 #include <linux/fs.h>
 #include <linux/miscdevice.h>
 #include <linux/mutex.h>
+#include <linux/gpio/consumer.h>
+#include <linux/gpio/driver.h>
+#include <linux/gpio.h>
 
 
 MODULE_LICENSE("GPL");
@@ -18,6 +21,14 @@ struct storage {
 };
 
 static struct storage word_storage;
+
+static char *gpio_chip_name = "sim_chip";
+module_param(gpio_chip_name, charp, 0644);
+
+static int gpio_offset = 0;
+module_param(gpio_offset, int, 0644);
+
+static int gpio_pin = -1;
 
 static ssize_t words_read (struct file *filp, char __user *buf,
                            size_t count, loff_t *ppos)
@@ -86,6 +97,49 @@ static struct miscdevice miscdev = {
     .fops = &devFileOps,
 };
 
+static int match_chip_by_name(struct gpio_chip *gc, const void *data)
+{
+    const char *name = data;
+    if (!gc || !gc->label || !name) {
+        return 0;
+    }
+    return sysfs_streq(gc->label, name);
+}
+
+static int gpio_init (void)
+{
+    struct gpio_chip *chip;
+
+    struct gpio_device *gpio_dev = gpio_device_find(gpio_chip_name, match_chip_by_name);
+    if (!gpio_dev) {
+        pr_err("Could not find GPIO device '%s'.\n", gpio_chip_name);
+        return -ENODEV;
+    }
+
+    chip = gpio_device_get_chip(gpio_dev);
+    if (!chip)
+    {
+        gpio_device_put (gpio_dev);
+        return -ENODEV;
+    }
+
+    if (gpio_offset < 0 || gpio_offset >= chip->ngpio) {
+        pr_err("Invalid GPIO line offset %d.\n", gpio_offset);
+        gpio_device_put (gpio_dev);
+        return -EINVAL;
+    }
+
+    gpio_pin = chip->base + gpio_offset;
+    gpio_device_put (gpio_dev);
+
+    if(!gpio_is_valid(gpio_pin)) {
+        pr_err("Invalid GPIO pin.\n");
+        return -EINVAL;
+    }
+
+    return 0;
+}
+
 static int __init words_init (void) 
 {
     int ret;
@@ -95,11 +149,17 @@ static int __init words_init (void)
     mutex_init(&word_storage.lock);
 
     ret = misc_register(&miscdev);
-
     if (ret) {
         pr_err("Failed to load module\n");
         return ret;
     }
+
+    ret = gpio_init();
+    if(ret) {
+        misc_deregister(&miscdev);
+        return ret;
+    }
+
     pr_info("Module loaded\n");
 
     return 0;
