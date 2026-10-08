@@ -18,6 +18,9 @@ MODULE_DESCRIPTION("A module to write to and read from a file");
 struct storage {
     char    *buf;
     size_t   buf_len;
+    char *words_split;
+    char **words;
+    int num_words;
     struct mutex lock;
 };
 
@@ -63,6 +66,10 @@ static ssize_t words_write(struct file *file, const char __user *buf,
                                 size_t count, loff_t *ppos)
 {
     char *temp;
+    char *split, *cur, *word;
+    char **words;
+    size_t max_words;
+    int i = 0;
 
     temp = kmalloc(count + 1, GFP_KERNEL);
     if (!temp)
@@ -74,10 +81,37 @@ static ssize_t words_write(struct file *file, const char __user *buf,
     }
     temp[count] = '\0';
 
+    split = kstrdup(temp, GFP_KERNEL);
+    if(!split) {
+        kfree(temp);
+        return -ENOMEM;
+    }
+
+    max_words = count / 2 + 1; // maximum number of words if each word were one character with a space in between.
+    words = kmalloc_array (max_words, sizeof(*words), GFP_KERNEL);
+    if (!words) {
+        kfree(split);
+        kfree(words);
+        return -ENOMEM;
+    }
+
+    cur = split;
+
+    while ((word = strsep(&cur, " \t\n")) != NULL) {
+        if (*word == '\0')
+            continue;
+        words[i++] = word;
+    }
+
     mutex_lock(&word_storage.lock);
-    kfree(word_storage.buf);          // free whatever was stored before (replace semantics)
+    kfree(word_storage.buf);
+    kfree(word_storage.words_split);
+    kfree(word_storage.words);
     word_storage.buf = temp;
     word_storage.buf_len = count;
+    word_storage.words_split = split;
+    word_storage.words = words;
+    word_storage.num_words = i;
     mutex_unlock(&word_storage.lock);
 
     printk(KERN_INFO "wordstore: stored %zu bytes\n", count);
@@ -109,7 +143,16 @@ static int match_chip_by_name(struct gpio_chip *gc, const void *data)
 }
 
 static irqreturn_t gpio_irq_thread_handler(int irq, void *data) {
-    pr_info("Inside interrupt handler\n");
+    mutex_lock (&word_storage.lock);
+    if (word_storage.num_words <= 0) {
+        pr_info ("No words to log\n");
+        goto end;
+    }
+
+    pr_info ("Randomly selected word: %s\n", word_storage.words[get_random_u32_below(word_storage.num_words)]);
+
+    end:
+    mutex_unlock(&word_storage.lock);
     return IRQ_HANDLED;
 }
 
@@ -176,6 +219,9 @@ static int __init words_init (void)
 
     word_storage.buf = NULL;
     word_storage.buf_len = 0;
+    word_storage.words_split = NULL;
+    word_storage.words = NULL;
+    word_storage.num_words = 0;
     mutex_init(&word_storage.lock);
 
     ret = misc_register(&miscdev);
@@ -202,7 +248,13 @@ static void __exit words_exit (void)
 
     mutex_lock(&word_storage.lock);
     kfree(word_storage.buf);
+    kfree(word_storage.words_split);
+    kfree(word_storage.words);
     word_storage.buf = NULL;
+    word_storage.buf_len = 0;
+    word_storage.words_split = NULL;
+    word_storage.words = NULL;
+    word_storage.num_words = 0;
     mutex_unlock(&word_storage.lock);
     
     misc_deregister (&miscdev);
