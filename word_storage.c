@@ -8,6 +8,7 @@
 #include <linux/gpio/consumer.h>
 #include <linux/gpio/driver.h>
 #include <linux/gpio.h>
+#include <linux/interrupt.h>
 
 
 MODULE_LICENSE("GPL");
@@ -29,6 +30,7 @@ static int gpio_offset = 0;
 module_param(gpio_offset, int, 0644);
 
 static int gpio_pin = -1;
+static int gpio_irq;
 
 static ssize_t words_read (struct file *filp, char __user *buf,
                            size_t count, loff_t *ppos)
@@ -106,9 +108,15 @@ static int match_chip_by_name(struct gpio_chip *gc, const void *data)
     return sysfs_streq(gc->label, name);
 }
 
+static irqreturn_t gpio_irq_thread_handler(int irq, void *data) {
+    pr_info("Inside interrupt handler\n");
+    return IRQ_HANDLED;
+}
+
 static int gpio_init (void)
 {
     struct gpio_chip *chip;
+    int ret;
 
     struct gpio_device *gpio_dev = gpio_device_find(gpio_chip_name, match_chip_by_name);
     if (!gpio_dev) {
@@ -137,7 +145,29 @@ static int gpio_init (void)
         return -EINVAL;
     }
 
+    ret = gpio_request (gpio_pin, "WordIRQ");
+    if (ret)
+        return ret;
+
+    ret = gpio_direction_input (gpio_pin);
+    if (ret)
+        goto out;
+
+    gpio_irq = gpio_to_irq(gpio_pin);
+    if (gpio_irq < 0) {
+        ret = gpio_irq;
+        goto out;
+    }
+
+    ret = request_threaded_irq (gpio_irq, NULL, gpio_irq_thread_handler, IRQF_TRIGGER_RISING | IRQF_ONESHOT, "WordIRQ", NULL);
+    if (ret)
+        goto out;
+
     return 0;
+
+    out:
+    gpio_free (gpio_pin);
+    return ret;
 }
 
 static int __init words_init (void) 
@@ -167,6 +197,9 @@ static int __init words_init (void)
 
 static void __exit words_exit (void) 
 {
+    free_irq(gpio_irq, NULL);
+    gpio_free(gpio_pin);
+
     mutex_lock(&word_storage.lock);
     kfree(word_storage.buf);
     word_storage.buf = NULL;
